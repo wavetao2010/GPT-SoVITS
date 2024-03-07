@@ -16,6 +16,7 @@ logging.getLogger("asyncio").setLevel(logging.ERROR)
 logging.getLogger("charset_normalizer").setLevel(logging.ERROR)
 logging.getLogger("torchaudio._extension").setLevel(logging.ERROR)
 import pdb
+import torch
 
 if os.path.exists("./gweight.txt"):
     with open("./gweight.txt", 'r', encoding="utf-8") as file:
@@ -48,11 +49,11 @@ is_share = os.environ.get("is_share", "False")
 is_share = eval(is_share)
 if "_CUDA_VISIBLE_DEVICES" in os.environ:
     os.environ["CUDA_VISIBLE_DEVICES"] = os.environ["_CUDA_VISIBLE_DEVICES"]
-is_half = eval(os.environ.get("is_half", "True"))
+is_half = eval(os.environ.get("is_half", "True")) and not torch.backends.mps.is_available()
 import gradio as gr
 from transformers import AutoModelForMaskedLM, AutoTokenizer
 import numpy as np
-import librosa, torch
+import librosa
 from feature_extractor import cnhubert
 
 cnhubert.cnhubert_base_path = cnhubert_base_path
@@ -72,8 +73,6 @@ os.environ['PYTORCH_ENABLE_MPS_FALLBACK'] = '1'  # 确保直接启动推理UI时
 
 if torch.cuda.is_available():
     device = "cuda"
-elif torch.backends.mps.is_available():
-    device = "mps"
 else:
     device = "cpu"
 
@@ -209,54 +208,8 @@ dict_language = {
 }
 
 
-def splite_en_inf(sentence, language):
-    pattern = re.compile(r'[a-zA-Z ]+')
-    textlist = []
-    langlist = []
-    pos = 0
-    for match in pattern.finditer(sentence):
-        start, end = match.span()
-        if start > pos:
-            textlist.append(sentence[pos:start])
-            langlist.append(language)
-        textlist.append(sentence[start:end])
-        langlist.append("en")
-        pos = end
-    if pos < len(sentence):
-        textlist.append(sentence[pos:])
-        langlist.append(language)
-    # Merge punctuation into previous word
-    for i in range(len(textlist)-1, 0, -1):
-        if re.match(r'^[\W_]+$', textlist[i]):
-            textlist[i-1] += textlist[i]
-            del textlist[i]
-            del langlist[i]
-    # Merge consecutive words with the same language tag
-    i = 0
-    while i < len(langlist) - 1:
-        if langlist[i] == langlist[i+1]:
-            textlist[i] += textlist[i+1]
-            del textlist[i+1]
-            del langlist[i+1]
-        else:
-            i += 1
-
-    return textlist, langlist
-
-
 def clean_text_inf(text, language):
-    formattext = ""
-    language = language.replace("all_","")
-    for tmp in LangSegment.getTexts(text):
-        if language == "ja":
-            if tmp["lang"] == language or tmp["lang"] == "zh":
-                formattext += tmp["text"] + " "
-            continue
-        if tmp["lang"] == language:
-            formattext += tmp["text"] + " "
-    while "  " in formattext:
-        formattext = formattext.replace("  ", " ")
-    phones, word2ph, norm_text = clean_text(formattext, language)
+    phones, word2ph, norm_text = clean_text(text, language)
     phones = cleaned_text_to_sequence(phones)
     return phones, word2ph, norm_text
 
@@ -274,55 +227,6 @@ def get_bert_inf(phones, word2ph, norm_text, language):
     return bert
 
 
-def nonen_clean_text_inf(text, language):
-    if(language!="auto"):
-        textlist, langlist = splite_en_inf(text, language)
-    else:
-        textlist=[]
-        langlist=[]
-        for tmp in LangSegment.getTexts(text):
-            langlist.append(tmp["lang"])
-            textlist.append(tmp["text"])
-    phones_list = []
-    word2ph_list = []
-    norm_text_list = []
-    for i in range(len(textlist)):
-        lang = langlist[i]
-        phones, word2ph, norm_text = clean_text_inf(textlist[i], lang)
-        phones_list.append(phones)
-        if lang == "zh":
-            word2ph_list.append(word2ph)
-        norm_text_list.append(norm_text)
-    print(word2ph_list)
-    phones = sum(phones_list, [])
-    word2ph = sum(word2ph_list, [])
-    norm_text = ' '.join(norm_text_list)
-
-    return phones, word2ph, norm_text
-
-
-def nonen_get_bert_inf(text, language):
-    if(language!="auto"):
-        textlist, langlist = splite_en_inf(text, language)
-    else:
-        textlist=[]
-        langlist=[]
-        for tmp in LangSegment.getTexts(text):
-            langlist.append(tmp["lang"])
-            textlist.append(tmp["text"])
-    print(textlist)
-    print(langlist)
-    bert_list = []
-    for i in range(len(textlist)):
-        lang = langlist[i]
-        phones, word2ph, norm_text = clean_text_inf(textlist[i], lang)
-        bert = get_bert_inf(phones, word2ph, norm_text, lang)
-        bert_list.append(bert)
-    bert = torch.cat(bert_list, dim=1)
-
-    return bert
-
-
 splits = {"，", "。", "？", "！", ",", ".", "?", "!", "~", ":", "：", "—", "…", }
 
 
@@ -332,23 +236,63 @@ def get_first(text):
     return text
 
 
-def get_cleaned_text_final(text,language):
+def get_phones_and_bert(text,language):
     if language in {"en","all_zh","all_ja"}:
-        phones, word2ph, norm_text = clean_text_inf(text, language)
+        language = language.replace("all_","")
+        if language == "en":
+            LangSegment.setfilters(["en"])
+            formattext = " ".join(tmp["text"] for tmp in LangSegment.getTexts(text))
+        else:
+            # 因无法区别中日文汉字,以用户输入为准
+            formattext = text
+        while "  " in formattext:
+            formattext = formattext.replace("  ", " ")
+        phones, word2ph, norm_text = clean_text_inf(formattext, language)
+        if language == "zh":
+            bert = get_bert_feature(norm_text, word2ph).to(device)
+        else:
+            bert = torch.zeros(
+                (1024, len(phones)),
+                dtype=torch.float16 if is_half == True else torch.float32,
+            ).to(device)
     elif language in {"zh", "ja","auto"}:
-        phones, word2ph, norm_text = nonen_clean_text_inf(text, language)
-    return phones, word2ph, norm_text
+        textlist=[]
+        langlist=[]
+        LangSegment.setfilters(["zh","ja","en","ko"])
+        if language == "auto":
+            for tmp in LangSegment.getTexts(text):
+                if tmp["lang"] == "ko":
+                    langlist.append("zh")
+                    textlist.append(tmp["text"])
+                else:
+                    langlist.append(tmp["lang"])
+                    textlist.append(tmp["text"])
+        else:
+            for tmp in LangSegment.getTexts(text):
+                if tmp["lang"] == "en":
+                    langlist.append(tmp["lang"])
+                else:
+                    # 因无法区别中日文汉字,以用户输入为准
+                    langlist.append(language)
+                textlist.append(tmp["text"])
+        print(textlist)
+        print(langlist)
+        phones_list = []
+        bert_list = []
+        norm_text_list = []
+        for i in range(len(textlist)):
+            lang = langlist[i]
+            phones, word2ph, norm_text = clean_text_inf(textlist[i], lang)
+            bert = get_bert_inf(phones, word2ph, norm_text, lang)
+            phones_list.append(phones)
+            norm_text_list.append(norm_text)
+            bert_list.append(bert)
+        bert = torch.cat(bert_list, dim=1)
+        phones = sum(phones_list, [])
+        norm_text = ''.join(norm_text_list)
 
-def get_bert_final(phones, word2ph, text,language,device):
-    if language == "en":
-        bert = get_bert_inf(phones, word2ph, text, language)
-    elif language in {"zh", "ja","auto"}:
-        bert = nonen_get_bert_inf(text, language)
-    elif language == "all_zh":
-        bert = get_bert_feature(text, word2ph).to(device)
-    else:
-        bert = torch.zeros((1024, len(phones))).to(device)
-    return bert
+    return phones,bert.to(dtype),norm_text
+
 
 def merge_short_text_in_array(texts, threshold):
     if (len(texts)) < 2:
@@ -427,8 +371,7 @@ def get_tts_wav(ref_wav_path, prompt_text, prompt_language, text, text_language,
     timestamps_list = []
     timestamps_start = 0
     if not ref_free:
-        phones1, word2ph1, norm_text1=get_cleaned_text_final(prompt_text, prompt_language)
-        bert1=get_bert_final(phones1, word2ph1, norm_text1,prompt_language,device).to(dtype)
+        phones1,bert1,norm_text1=get_phones_and_bert(prompt_text, prompt_language)
 
     for text in texts:
         # 解决输入目标文本的空行导致报错的问题
@@ -436,8 +379,8 @@ def get_tts_wav(ref_wav_path, prompt_text, prompt_language, text, text_language,
             continue
         if (text[-1] not in splits): text += "。" if text_language != "en" else "."
         print(i18n("实际输入的目标文本(每句):"), text)
-        phones2, word2ph2, norm_text2 = get_cleaned_text_final(text, text_language)
-        bert2 = get_bert_final(phones2, word2ph2, norm_text2, text_language, device).to(dtype)
+        phones2,bert2,norm_text2=get_phones_and_bert(text, text_language)
+        print(i18n("前端处理后的文本(每句):"), norm_text2)
         if not ref_free:
             bert = torch.cat([bert1, bert2], 1)
             all_phoneme_ids = torch.LongTensor(phones1+phones2).to(device).unsqueeze(0)
@@ -635,12 +578,12 @@ with gr.Blocks(title="GPT-SoVITS WebUI") as app:
             inp_ref = gr.Audio(label=i18n("请上传3~10秒内参考音频，超过会报错！"), type="filepath")
             with gr.Column():
                 ref_text_free = gr.Checkbox(label=i18n("开启无参考文本模式。不填参考文本亦相当于开启。"), value=False, interactive=True, show_label=True)
-                gr.Markdown(i18n("使用无参考文本模式时建议使用微调的GPT"))
+                gr.Markdown(i18n("使用无参考文本模式时建议使用微调的GPT，听不清参考音频说的啥(不晓得写啥)可以开，开启后无视填写的参考文本。"))
                 prompt_text = gr.Textbox(label=i18n("参考音频的文本"), value="")
             prompt_language = gr.Dropdown(
                 label=i18n("参考音频的语种"), choices=[i18n("中文"), i18n("英文"), i18n("日文"), i18n("中英混合"), i18n("日英混合"), i18n("多语种混合")], value=i18n("中文")
             )
-        gr.Markdown(value=i18n("*请填写需要合成的目标文本。中英混合选中文，日英混合选日文，中日混合暂不支持，非目标语言文本自动遗弃。"))
+        gr.Markdown(value=i18n("*请填写需要合成的目标文本和语种模式"))
         with gr.Row():
             text = gr.Textbox(label=i18n("需要合成的文本"), value="")
             text_language = gr.Dropdown(
@@ -653,7 +596,7 @@ with gr.Blocks(title="GPT-SoVITS WebUI") as app:
                 interactive=True,
             )
             with gr.Row():
-                gr.Markdown("gpt采样参数(无参考文本时不要太低)：")
+                gr.Markdown(value=i18n("gpt采样参数(无参考文本时不要太低)："))
                 top_k = gr.Slider(minimum=1,maximum=100,step=1,label=i18n("top_k"),value=5,interactive=True)
                 top_p = gr.Slider(minimum=0,maximum=1,step=0.05,label=i18n("top_p"),value=1,interactive=True)
                 temperature = gr.Slider(minimum=0,maximum=1,step=0.05,label=i18n("temperature"),value=1,interactive=True)
