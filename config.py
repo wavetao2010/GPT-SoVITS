@@ -40,6 +40,8 @@ if infer_device == "cuda":
             or "1060" in gpu_name
             or "1070" in gpu_name
             or "1080" in gpu_name
+            # or "A100" in gpu_name.upper()
+            # or "A10" in gpu_name.upper()
     ):
         is_half=False
 

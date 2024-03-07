@@ -9,7 +9,7 @@ from AR.models.utils import (
     logits_to_probs,
     multinomial_sample_one_no_sync,
     dpo_loss,
-    make_reject_y, 
+    make_reject_y,
     get_batch_logps
 )
 from AR.modules.embedding import SinePositionalEmbedding
@@ -115,7 +115,7 @@ class Text2SemanticDecoder(nn.Module):
             (0, y_len),
             value=True,
         )
-        
+
         y_attn_mask = F.pad(
             torch.triu(
                 torch.ones(y_len, y_len, dtype=torch.bool, device=x.device),
@@ -159,7 +159,8 @@ class Text2SemanticDecoder(nn.Module):
         logits = self.ar_predict_layer(xy_dec[:, x_len:])
 
         ###### DPO #############
-        reject_xy_pos, reject_xy_attn_mask, reject_targets = self.make_input_data(x, x_lens, reject_y, reject_y_lens, bert_feature)
+        reject_xy_pos, reject_xy_attn_mask, reject_targets = self.make_input_data(x, x_lens, reject_y, reject_y_lens,
+                                                                                  bert_feature)
 
         reject_xy_dec, _ = self.h(
             (reject_xy_pos, None),
@@ -176,7 +177,7 @@ class Text2SemanticDecoder(nn.Module):
 
         A_logits, R_logits = get_batch_logps(logits, reject_logits, targets, reject_targets)
         loss_2, _, _ = dpo_loss(A_logits, R_logits, 0, 0, 0.2, reference_free=True)
-        
+
         loss = loss_1 + loss_2
 
         return loss, acc
@@ -245,14 +246,14 @@ class Text2SemanticDecoder(nn.Module):
 
     # 需要看下这个函数和 forward 的区别以及没有 semantic 的时候 prompts 输入什么
     def infer(
-        self,
-        x,
-        x_lens,
-        prompts,
-        bert_feature,
-        top_k: int = -100,
-        early_stop_num: int = -1,
-        temperature: float = 1.0,
+            self,
+            x,
+            x_lens,
+            prompts,
+            bert_feature,
+            top_k: int = -100,
+            early_stop_num: int = -1,
+            temperature: float = 1.0,
     ):
         x = self.ar_text_embedding(x)
         x = x + self.bert_proj(bert_feature.transpose(1, 2))
@@ -321,15 +322,15 @@ class Text2SemanticDecoder(nn.Module):
         return targets[:, :-1], targets[:, 1:]
 
     def infer_panel(
-        self,
-        x,  #####全部文本token
-        x_lens,
-        prompts,  ####参考音频token
-        bert_feature,
-        top_k: int = -100,
-        top_p: int = 100,
-        early_stop_num: int = -1,
-        temperature: float = 1.0,
+            self,
+            x,  #####全部文本token
+            x_lens,
+            prompts,  ####参考音频token
+            bert_feature,
+            top_k: int = -100,
+            top_p: int = 100,
+            early_stop_num: int = -1,
+            temperature: float = 1.0,
     ):
         x = self.ar_text_embedding(x)
         x = x + self.bert_proj(bert_feature.transpose(1, 2))
@@ -337,7 +338,7 @@ class Text2SemanticDecoder(nn.Module):
 
         # AR Decoder
         y = prompts
-        
+
         x_len = x.shape[1]
         x_attn_mask = torch.zeros((x_len, x_len), dtype=torch.bool)
         stop = False
@@ -372,10 +373,10 @@ class Text2SemanticDecoder(nn.Module):
             ref_free = True
 
         x_attn_mask_pad = F.pad(
-                    x_attn_mask,
-                    (0, y_len),  ###xx的纯0扩展到xx纯0+xy纯1，(x,x+y)
-                    value=True,
-                )
+            x_attn_mask,
+            (0, y_len),  ###xx的纯0扩展到xx纯0+xy纯1，(x,x+y)
+            value=True,
+        )
         y_attn_mask = F.pad(  ###yy的右上1扩展到左边xy的0,(y,x+y)
             torch.triu(torch.ones(y_len, y_len, dtype=torch.bool), diagonal=1),
             (x_len, 0),
@@ -384,23 +385,22 @@ class Text2SemanticDecoder(nn.Module):
         xy_attn_mask = torch.concat([x_attn_mask_pad, y_attn_mask], dim=0).to(
             x.device
         )
-        
 
         for idx in tqdm(range(1500)):
-            
+
             xy_dec, _ = self.h((xy_pos, None), mask=xy_attn_mask, cache=cache)
             logits = self.ar_predict_layer(
                 xy_dec[:, -1]
             )  ##不用改，如果用了cache的默认就是只有一帧，取最后一帧一样的
-            # samples = topk_sampling(logits, top_k=top_k, top_p=1.0, temperature=temperature)
-            if(idx==0):###第一次跑不能EOS否则没有了
+            # samples = topk_nsamplig(logits, top_k=top_k, top_p=1.0, temperature=temperature)
+            if (idx == 0):  ###第一次跑不能EOS否则没有了
                 logits = logits[:, :-1]  ###刨除1024终止符号的概率
             samples = sample(
                 logits[0], y, top_k=top_k, top_p=top_p, repetition_penalty=1.35, temperature=temperature
             )[0].unsqueeze(0)
             # 本次生成的 semantic_ids 和之前的 y 构成新的 y
             # print(samples.shape)#[1,1]#第一个1是bs
-            y = torch.concat([y, samples], dim=1) 
+            y = torch.concat([y, samples], dim=1)
 
             if early_stop_num != -1 and (y.shape[1] - prefix_len) > early_stop_num:
                 print("use early stop num:", early_stop_num)
@@ -413,17 +413,17 @@ class Text2SemanticDecoder(nn.Module):
                 # if prompts.shape[1] == y.shape[1]:
                 #     y = torch.concat([y, torch.zeros_like(samples)], dim=1)
                 #     print("bad zero prediction")
-                if y.shape[1]==0:
+                if y.shape[1] == 0:
                     y = torch.concat([y, torch.zeros_like(samples)], dim=1)
                     print("bad zero prediction")
                 print(f"T2S Decoding EOS [{prefix_len} -> {y.shape[1]}]")
                 break
-            
+
             ####################### update next step ###################################
             cache["first_infer"] = 0
             if cache["y_emb"] is not None:
                 y_emb = torch.cat(
-                    [cache["y_emb"], self.ar_audio_embedding(y[:, -1:])], dim = 1
+                    [cache["y_emb"], self.ar_audio_embedding(y[:, -1:])], dim=1
                 )
                 cache["y_emb"] = y_emb
                 y_pos = self.ar_audio_position(y_emb)
@@ -444,4 +444,4 @@ class Text2SemanticDecoder(nn.Module):
             )
         if ref_free:
             return y[:, :-1], 0
-        return y[:, :-1], idx-1
+        return y[:, :-1], idx - 1
