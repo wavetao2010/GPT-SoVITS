@@ -368,8 +368,6 @@ def get_tts_wav(ref_wav_path, prompt_text, prompt_language, text, text_language,
     texts = text.split("\n")
     texts = merge_short_text_in_array(texts, 5)
     audio_opt = []
-    timestamps_list = []
-    timestamps_start = 0
     if not ref_free:
         phones1,bert1,norm_text1=get_phones_and_bert(prompt_text, prompt_language)
 
@@ -415,12 +413,6 @@ def get_tts_wav(ref_wav_path, prompt_text, prompt_language, text, text_language,
             refer = refer.half().to(device)
         else:
             refer = refer.to(device)
-        # audio = vq_model.decode(pred_semantic, all_phoneme_ids, refer).detach().cpu().numpy()[0, 0]
-        timestamps = (
-            vq_model.decode_with_timestamps(
-                timestamps_start,torch.LongTensor(phones2).to(device).unsqueeze(0),hps.data.sampling_rate
-            )
-        )
         audio= (
             vq_model.decode(
                 pred_semantic, torch.LongTensor(phones2).to(device).unsqueeze(0), refer
@@ -430,16 +422,11 @@ def get_tts_wav(ref_wav_path, prompt_text, prompt_language, text, text_language,
             .numpy()[0, 0]
         )
         max_audio=np.abs(audio).max()#简单防止16bit爆音
-        print(f'timestamps',timestamps)
-        timestamps_list.append(timestamps)
-        print(timestamps[0][-1])
-        timestamps_start = timestamps_start + timestamps[0][-1]
         if max_audio>1:audio/=max_audio
         audio_opt.append(audio)
         audio_opt.append(zero_wav)
         t4 = ttime()
     print("%.3f\t%.3f\t%.3f\t%.3f" % (t1 - t0, t2 - t1, t3 - t2, t4 - t3))
-    print(f'timestamps_list',timestamps_list)
     yield hps.data.sampling_rate, (np.concatenate(audio_opt, 0) * 32768).astype(
         np.int16
     )

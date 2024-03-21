@@ -13,3 +13,6 @@ def cleaned_text_to_sequence(cleaned_text):
   phones = [_symbol_to_id[symbol] for symbol in cleaned_text]
   return phones
 
+def sequence_to_cleaned_text(sequence):
+    phones = [symbols[id] for id in sequence]
+    return phones

@@ -46,10 +46,27 @@ def execute_asr(input_folder, output_folder, model_size, language,precision):
     if language == 'auto':
         language = 'zh' #不设置语种由模型自动输出概率最高的语种
     print("loading whisper model:",model_size,model_path)
+    device = "cuda:0" if torch.cuda.is_available() else "cpu"
+    torch_dtype = torch.float16 if torch.cuda.is_available() else torch.float32
     try:
-        processor = WhisperProcessor.from_pretrained(model_path)
-        model = WhisperForConditionalGeneration.from_pretrained(model_path)
-        model.config.forced_decoder_ids = None
+        model = AutoModelForSpeechSeq2Seq.from_pretrained(
+            model_path, torch_dtype=torch_dtype, low_cpu_mem_usage=True, use_safetensors=True
+        )
+        model.to(device)
+
+        processor = AutoProcessor.from_pretrained(model_path)
+        pipe = pipeline(
+            "automatic-speech-recognition",
+            model=model,
+            tokenizer=processor.tokenizer,
+            feature_extractor=processor.feature_extractor,
+            max_new_tokens=128,
+            chunk_length_s=30,
+            batch_size=16,
+            return_timestamps=False,
+            torch_dtype=torch_dtype,
+            device=device,
+        )
     except:
         return print(traceback.format_exc())
     output = []
@@ -65,10 +82,12 @@ def execute_asr(input_folder, output_folder, model_size, language,precision):
             if sampling_rate != 16000:
                 data = librosa.resample(y=data, orig_sr=sampling_rate, target_sr=16000)
                 sampling_rate = 16000
-            input_features = processor(data, sampling_rate=sampling_rate,
-                                       return_tensors="pt").input_features
-            predicted_ids = model.generate(input_features)
-            text = processor.batch_decode(predicted_ids, skip_special_tokens=True)
+            # input_features = processor(data, sampling_rate=sampling_rate,
+            #                            return_tensors="pt").input_features
+            # predicted_ids = model.generate(input_features)
+            # text = processor.batch_decode(predicted_ids, skip_special_tokens=True)
+            result = pipe(data)
+            text = result['text']
             output.append(f"{file}|{output_file_name}|{language.upper()}|{text}")
         except:
             return print(traceback.format_exc())

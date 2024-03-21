@@ -1,6 +1,9 @@
-from text import chinese, japanese, cleaned_text_to_sequence, symbols, english
-
-language_module_map = {"zh": chinese, "ja": japanese, "en": english}
+from text import chinese, cleaned_text_to_sequence, symbols, english
+from phonemizer import phonemize
+from phonemizer.backend import EspeakBackend
+from phonemizer.separator import Separator
+from phonemizer.punctuation import Punctuation
+language_module_map = {"zh": chinese, "en": english}
 special = [
     # ("%", "zh", "SP"),
     ("￥", "zh", "SP2"),
@@ -18,17 +21,39 @@ def clean_text(text, language):
             return clean_special(text, language, special_s, target_symbol)
     language_module = language_module_map[language]
     norm_text = language_module.text_normalize(text)
+    # 初始化分隔符
     if language == "zh":
         phones, word2ph = language_module.g2p(norm_text)
         assert len(phones) == sum(word2ph)
         assert len(norm_text) == len(word2ph)
+        ipas = []
     else:
-        phones = language_module.g2p(norm_text)
-        word2ph = None
+        separator = Separator(word="_", syllable="-", phone="|")
 
+        # 创建espeak后端实例
+        phonemizer = EspeakBackend(
+            language='en-us' if language == "en" else language,
+            punctuation_marks=Punctuation.default_marks(),
+            preserve_punctuation=True,
+            with_stress=False,
+            tie=False,
+            language_switch="keep-flags",
+            words_mismatch="ignore",
+        )
+        phones = language_module.g2p(norm_text)
+        norm_text2ipa = norm_text.split()
+        ipas = phonemizer.phonemize(
+            norm_text2ipa,
+            separator=separator,
+            strip=True,
+            njobs=1
+        )
+        ipas = [ipa.split('|') for ipa in ipas]
+        word2ph = [len(word) for word in ipas]
+        ipas = ['1' + ipa for sublist in ipas for ipa in sublist]
     for ph in phones:
         assert ph in symbols
-    return phones, word2ph, norm_text
+    return phones, word2ph, norm_text,ipas
 
 
 def clean_special(text, language, special_s, target_symbol):
