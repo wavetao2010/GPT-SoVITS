@@ -146,9 +146,9 @@ parser = argparse.ArgumentParser(description="GPT-SoVITS api")
 parser.add_argument("-s", "--sovits_path", type=str, default=g_config.sovits_path['xiong2'], help="SoVITS模型路径")
 parser.add_argument("-g", "--gpt_path", type=str, default=g_config.gpt_path['xiong2'], help="GPT模型路径")
 
-parser.add_argument("-dr", "--default_refer_path", type=str, default=g_config.refer_path['xiong2'], help="默认参考音频路径")
-parser.add_argument("-dt", "--default_refer_text", type=str, default=g_config.refer_text['xiong2'], help="默认参考音频文本")
-parser.add_argument("-dl", "--default_refer_language", type=str, default=g_config.refer_language['xiong2'], help="默认参考音频语种")
+parser.add_argument("-dr", "--default_refer_path", type=str, default=g_config.emotion_list['xiong2']['default']['refer_path'], help="默认参考音频路径")
+parser.add_argument("-dt", "--default_refer_text", type=str, default=g_config.emotion_list['xiong2']['default']['prompt_text'], help="默认参考音频文本")
+parser.add_argument("-dl", "--default_refer_language", type=str, default=g_config.emotion_list['xiong2']['default']['prompt_language'], help="默认参考音频语种")
 
 parser.add_argument("-d", "--device", type=str, default=g_config.infer_device, help="cuda / cpu / mps")
 parser.add_argument("-a", "--bind_addr", type=str, default="0.0.0.0", help="default: 0.0.0.0")
@@ -519,14 +519,11 @@ def get_tts_wav(ref_wav_path, prompt_text, prompt_language, text, text_language,
     phones1, bert1, norm_text1,_,_ = get_phones_and_bert(prompt_text, prompt_language)
     for text in texts:
         phones2,bert2, norm_text2_align,phones2_align,word2ph2_align = get_phones_and_bert(text, text_language)
-        print(f"参考文本维度：{bert1.shape}, TTS文本维度：{bert2.shape}")
         bert = torch.cat([bert1, bert2], 1)
-        print(f"合并后维度：{bert.shape}")
         all_phoneme_ids = torch.LongTensor(phones1 + phones2).to(device).unsqueeze(0)
         bert = bert.to(device).unsqueeze(0)
         all_phoneme_len = torch.tensor([all_phoneme_ids.shape[-1]]).to(device)
         prompt = prompt_semantic.unsqueeze(0).to(device)
-        t2 = ttime()
         with torch.no_grad():
             # pred_semantic = t2s_model.model.infer(
             pred_semantic, idx = t2s_model.model.infer_panel(
@@ -591,7 +588,7 @@ def handle_change(path, text, language):
     return JSONResponse({"code": 0, "message": "Success"}, status_code=200)
 
 
-def handle(refer_wav_path, prompt_text, prompt_language, text, text_language):
+def handle(refer_wav_path, prompt_text, prompt_language, text, text_language,request_id):
     if (
             refer_wav_path == "" or refer_wav_path is None
             or prompt_text == "" or prompt_text is None
@@ -628,6 +625,7 @@ def handle(refer_wav_path, prompt_text, prompt_language, text, text_language):
         torch.mps.empty_cache()
     # Return audio stream and timestamp info as JSON
     return JSONResponse({
+        "request_id": request_id,
         "audio": audio_base64,
         "align_info": align_info
     })
@@ -684,17 +682,19 @@ async def change_refer(
 async def tts_endpoint(request: Request):
     json_post_raw = await request.json()
     model = json_post_raw.get("model")
+    emotion = 'default' if json_post_raw.get("emotion") == None else json_post_raw.get("emotion")
     if g_config.sovits_path[model] != sovits_path or g_config.gpt_path[model] != gpt_path:
         if model is not None:
             set_model(model)
         else:
             return JSONResponse({"code": 400, "message": "未指定模型"}, status_code=400)
     return handle(
-        g_config.refer_path[model],
-        g_config.refer_text[model],
-        g_config.refer_language[model],
+        g_config.emotion_list[model][emotion]['refer_path'],
+        g_config.emotion_list[model][emotion]['prompt_text'],
+        g_config.emotion_list[model][emotion]['prompt_language'],
         json_post_raw.get("text"),
         json_post_raw.get("text_language"),
+        json_post_raw.get("request_id"),
     )
 
 @app.get("/")

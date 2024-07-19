@@ -985,23 +985,7 @@ class SynthesizerTrn(nn.Module):
 
         o = self.dec((z * y_mask)[:, :, :], g=ge)
         return o
-    def decode_with_timestamps(self, timestamps_start,phonemes,sampling_rate=22050):
-        # Call the existing decode method to get the audio
-        # audio = self.decode(codes, text, refer, noise_scale)
 
-        # Initialize a list to store the timestamps
-        timestamps = []
-        print("phonemes",phonemes)
-        print(len(phonemes[0]))
-        print(self.segment_size,sampling_rate )
-        # Track the start and end times of each word or character
-        # This is a placeholder and will depend on your specific implementation
-        start_time = timestamps_start * self.segment_size / sampling_rate
-        end_time = len(phonemes[0]) * self.segment_size / sampling_rate
-        timestamps.append((start_time, end_time))
-
-        # Return the audio and the timestamps
-        return timestamps
     def extract_latent(self, x):
         ssl = self.ssl_proj(x)
         quantized, codes, commit_loss, quantized_list = self.quantizer(ssl)

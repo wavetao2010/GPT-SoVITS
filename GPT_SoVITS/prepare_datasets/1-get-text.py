@@ -49,8 +49,8 @@ if os.path.exists(txt_path) == False:
     os.makedirs(bert_dir, exist_ok=True)
     if torch.cuda.is_available():
         device = "cuda:0"
-    elif torch.backends.mps.is_available():
-        device = "mps"
+    # elif torch.backends.mps.is_available():
+    #     device = "mps"
     else:
         device = "cpu"
     tokenizer = AutoTokenizer.from_pretrained(bert_pretrained_dir)
@@ -82,7 +82,7 @@ if os.path.exists(txt_path) == False:
         for name, text, lan in data:
             try:
                 name = os.path.basename(name)
-                phones, word2ph, norm_text = clean_text(
+                phones, word2ph, norm_text,_ = clean_text(
                     text.replace("%", "-").replace("￥", ","), lan
                 )
                 path_bert = "%s/%s.pt" % (bert_dir, name)

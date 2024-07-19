@@ -9,7 +9,7 @@ import torchaudio as ta
 from dataclasses import dataclass
 import numpy as np
 import librosa
-
+import string
 @dataclass
 class Point:
     token_index: int
@@ -174,12 +174,17 @@ class Aligner():
             phones2phones_align_index.append(len(phones_align) - 1)
         segments = self.model(torch.tensor(phones_align), audio)
 
+        def is_punctuation(s):
+            return all(c in string.punctuation for c in s)
+
         text_timestamps = []
         for i, text in enumerate(norm_text):
+            text_type = 'punctuation' if is_punctuation(text) else 'word'
             text_timestamps.append({
                 'seg': text,
                 'start': segments[phones2phones_align_index[text2index[i][0]]].start + align_offset_time,
-                'end': segments[phones2phones_align_index[text2index[i][1]]].end + align_offset_time
+                'end': segments[phones2phones_align_index[text2index[i][1]]].end + align_offset_time,
+                'boundary_type': text_type
             })
         return text_timestamps
 

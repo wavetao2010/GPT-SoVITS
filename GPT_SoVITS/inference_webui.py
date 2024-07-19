@@ -60,7 +60,7 @@ cnhubert.cnhubert_base_path = cnhubert_base_path
 
 from module.models import SynthesizerTrn
 from AR.models.t2s_lightning_module import Text2SemanticLightningModule
-from text import cleaned_text_to_sequence
+from text import cleaned_text_to_sequence,sequence_to_cleaned_text, symbols
 from text.cleaner import clean_text
 from time import time as ttime
 from module.mel_processing import spectrogram_torch
@@ -209,9 +209,9 @@ dict_language = {
 
 
 def clean_text_inf(text, language):
-    phones, word2ph, norm_text = clean_text(text, language)
+    phones, word2ph, norm_text, ipa = clean_text(text, language)
     phones = cleaned_text_to_sequence(phones)
-    return phones, word2ph, norm_text
+    return phones, word2ph, norm_text, ipa
 
 dtype=torch.float16 if is_half == True else torch.float32
 def get_bert_inf(phones, word2ph, norm_text, language):
@@ -239,6 +239,7 @@ def get_first(text):
 def get_phones_and_bert(text,language):
     if language in {"en","all_zh","all_ja"}:
         language = language.replace("all_","")
+        phones_list = []
         if language == "en":
             LangSegment.setfilters(["en"])
             formattext = " ".join(tmp["text"] for tmp in LangSegment.getTexts(text))
@@ -247,12 +248,14 @@ def get_phones_and_bert(text,language):
             formattext = text
         while "  " in formattext:
             formattext = formattext.replace("  ", " ")
-        phones, word2ph, norm_text = clean_text_inf(formattext, language)
+        phones_sequence, word2ph, norm_text,ipa = clean_text_inf(formattext, language)
+        phones_list.append(ipa)
+        phones = sum(phones_list, [])
         if language == "zh":
             bert = get_bert_feature(norm_text, word2ph).to(device)
         else:
             bert = torch.zeros(
-                (1024, len(phones)),
+                (1024, len(phones_sequence)),
                 dtype=torch.float16 if is_half == True else torch.float32,
             ).to(device)
     elif language in {"zh", "ja","auto"}:
@@ -277,21 +280,32 @@ def get_phones_and_bert(text,language):
                 textlist.append(tmp["text"])
         print(textlist)
         print(langlist)
-        phones_list = []
+        phones_sequence_list = []
         bert_list = []
         norm_text_list = []
+        phones_list=[]
+        word2ph_list=[]
         for i in range(len(textlist)):
             lang = langlist[i]
-            phones, word2ph, norm_text = clean_text_inf(textlist[i], lang)
-            bert = get_bert_inf(phones, word2ph, norm_text, lang)
-            phones_list.append(phones)
+            # 获取音素ID序列，word2ph，规范化文本，音标列表
+            phones_sequence, word2ph, norm_text,ipa = clean_text_inf(textlist[i], lang)
+            # 获取bert特征
+            bert = get_bert_inf(phones_sequence, word2ph, norm_text, lang)
+            if lang == "zh":
+                phone = sequence_to_cleaned_text(phones_sequence)
+                phones_list.append(phone)
+            else:
+                phones_list.append(ipa)
+            phones_sequence_list.append(phones_sequence)
             norm_text_list.append(norm_text)
             bert_list.append(bert)
+            word2ph_list.append(word2ph)
         bert = torch.cat(bert_list, dim=1)
+        phones_sequence = sum(phones_sequence_list, [])
         phones = sum(phones_list, [])
+        word2ph = sum(word2ph_list, [])
         norm_text = ''.join(norm_text_list)
-
-    return phones,bert.to(dtype),norm_text
+    return phones_sequence,bert.to(dtype),norm_text,phones,word2ph
 
 
 def merge_short_text_in_array(texts, threshold):
@@ -369,7 +383,7 @@ def get_tts_wav(ref_wav_path, prompt_text, prompt_language, text, text_language,
     texts = merge_short_text_in_array(texts, 5)
     audio_opt = []
     if not ref_free:
-        phones1,bert1,norm_text1=get_phones_and_bert(prompt_text, prompt_language)
+        phones1, bert1, norm_text1,_,_ = get_phones_and_bert(prompt_text, prompt_language)
 
     for text in texts:
         # 解决输入目标文本的空行导致报错的问题
@@ -377,8 +391,8 @@ def get_tts_wav(ref_wav_path, prompt_text, prompt_language, text, text_language,
             continue
         if (text[-1] not in splits): text += "。" if text_language != "en" else "."
         print(i18n("实际输入的目标文本(每句):"), text)
-        phones2,bert2,norm_text2=get_phones_and_bert(text, text_language)
-        print(i18n("前端处理后的文本(每句):"), norm_text2)
+        phones2,bert2,norm_text2_align,phones2_align,word2ph2_align = get_phones_and_bert(text, text_language)
+        print(i18n("前端处理后的文本(每句):"), norm_text2_align)
         if not ref_free:
             bert = torch.cat([bert1, bert2], 1)
             all_phoneme_ids = torch.LongTensor(phones1+phones2).to(device).unsqueeze(0)

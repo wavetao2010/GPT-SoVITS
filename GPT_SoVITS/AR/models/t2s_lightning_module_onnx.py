@@ -8,7 +8,7 @@ from typing import Dict
 
 import torch
 from pytorch_lightning import LightningModule
-from AR.models.t2s_model_onnx import Text2SemanticDecoder
+from GPT_SoVITS.AR.models.t2s_model_onnx import Text2SemanticDecoder
 from AR.modules.lr_schedulers import WarmupCosineLRSchedule
 from AR.modules.optim import ScaledAdam
 

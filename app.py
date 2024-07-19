@@ -35,12 +35,12 @@ import traceback
 import LangSegment
 #导入初始化参数
 g_config = global_config.Config()
-model_name = "TVB"
-sovits_path = g_config.sovits_path[model_name]
-gpt_path = g_config.gpt_path[model_name]
-refer_wav_path = g_config.refer_path[model_name]
-prompt_text = g_config.refer_text[model_name]
-prompt_language = g_config.refer_language[model_name]
+# model_name = "TVB"
+# sovits_path = g_config.sovits_path[model_name]
+# gpt_path = g_config.gpt_path[model_name]
+# refer_wav_path = g_config.refer_path[model_name]
+# prompt_text = g_config.refer_text[model_name]
+# prompt_language = g_config.refer_language[model_name]
 cnhubert_base_path = g_config.cnhubert_path
 cnhubert.cnhubert_base_path = cnhubert_base_path
 bert_path = g_config.bert_path
@@ -67,16 +67,6 @@ class DictToAttrRecursive:
                 setattr(self, key, DictToAttrRecursive(value))
             else:
                 setattr(self, key, value)
-
-dict_s2 = torch.load(sovits_path, map_location="cpu")
-hps = dict_s2["config"]
-hps = DictToAttrRecursive(hps)
-hps.model.semantic_frame_rate = "25hz"
-dict_s1 = torch.load(gpt_path, map_location="cpu")
-config = dict_s1["config"]
-n_semantic = 1024
-hz = 50
-max_sec = config['data']['max_sec']
 
 
 @dataclass
@@ -116,9 +106,9 @@ class PhoneAligner():
     @torch.inference_mode()
     def __call__(
             self,
-            x,  # (T)
-            y  #
-    ) -> list:
+            x, # (T)
+            y #
+            ) -> list:
         with torch.no_grad():
             x = x + 1
             transcript = {idx: self.transcript[token] for idx, token in enumerate(x.tolist())}
@@ -199,40 +189,119 @@ class MyProcessor(allspark.BaseProcessor):
         """
         allspark.default_properties().put('rpc.keepalive', '10000000')
         device = "cuda:0" if torch.cuda.is_available() else "cpu"
+        self.device = device
         tokenizer = AutoTokenizer.from_pretrained(bert_path)
         bert_model = AutoModelForMaskedLM.from_pretrained(bert_path)
         bert_model = bert_model.to(device)
         ssl_model = cnhubert.get_model()
         ssl_model = ssl_model.to(device)
-        vq_model = SynthesizerTrn(
-            hps.data.filter_length // 2 + 1,
-            hps.train.segment_size // hps.data.hop_length,
-            n_speakers=hps.data.n_speakers,
-            **hps.model)
-        vq_model = vq_model.to(device)
-        vq_model.load_state_dict(dict_s2["weight"], strict=False)
-        t2s_model = Text2SemanticLightningModule(config, "****", is_train=False)
-        t2s_model.load_state_dict(dict_s1["weight"])
-        t2s_model = t2s_model.to(device)
         self.gsv2token = json.load(open(f'{str(Path.cwd())}/GPT_SoVITS/phone.json', 'r'))
         self.idx2token = {idx: self.gsv2token[token] for idx, token in enumerate(list(self.gsv2token.keys()))}
         self.gsv_phones = list(self.gsv2token.keys())
         aligner_model = PhoneAligner(f'{str(os.getcwd())}/GPT_SoVITS/pretrained_models/gsv_phone.pt', 24000,
                                   self.idx2token)
 
+        model_names = g_config.model_names_list
+        self.model_dicts = {}
+        for model_name in model_names:
+            models = []
+            gpt_path = g_config.gpt_path[model_name]
+            sovits_path = g_config.sovits_path[model_name]
+            t2s_model = self.change_gpt_weights(gpt_path)
+            vq_model, hps = self.change_sovits_weights(sovits_path)
+            models.append(vq_model)
+            models.append(t2s_model)
+            models.append(hps)
+            self.model_dicts[model_name] = models
 
         self.bert_model = bert_model
         self.tokenizer = tokenizer
         self.ssl_model = ssl_model
-        self.vq_model = vq_model
-        self.t2s_model = t2s_model
         self.aligner_model = aligner_model
-        self.device = device
+
     def pre_process(self, data):
         json_data = json.loads(data)
+        model_name = json_data.get("model_name")
         text = json_data.get("text")
         text_language = json_data.get("text_language")
-        return text, text_language
+        return model_name,text, text_language
+
+    def post_process(self, data):
+        """ process after process
+        """
+        audio_base64 = data.get("audio")
+        align_info = data.get("align_info")
+        response_data = {
+            "audio": audio_base64,
+            "align_info": align_info,
+        }
+        json_response = json.dumps(response_data, ensure_ascii=False)
+        return str(json_response).encode('utf-8')
+
+    def process(self, data):
+        try:
+            model_name,text, text_language = self.pre_process(data)
+            refer_wav_path = g_config.refer_path[model_name]
+            prompt_text = g_config.refer_text[model_name]
+            prompt_language = g_config.refer_language[model_name]
+            with torch.no_grad():
+                gen = self.get_tts_wav(
+                    model_name,refer_wav_path, prompt_text, prompt_language, text, text_language
+                )
+                sampling_rate, audio_data, align_info = next(gen)
+
+            # # save test align info
+            # json.dump(align_info, open("./tmp/align_info.json", "w", encoding="utf-8"), ensure_ascii=False)
+
+            wav = BytesIO()
+            sf.write(wav, audio_data, sampling_rate, format="wav")
+            wav.seek(0)
+
+            # Convert audio stream to base64
+            audio_base64 = base64.b64encode(wav.read()).decode('utf-8')
+            data = {
+                "audio": audio_base64,
+                "align_info": align_info
+            }
+            torch.cuda.empty_cache()
+            if self.device == "mps":
+                print('executed torch.mps.empty_cache()')
+                torch.mps.empty_cache()
+            # Return audio stream and timestamp info as JSON
+            return self.post_process(data), 200
+        except:
+            print(traceback.format_exc())
+            error_result = {
+                "status_text": 'error',
+                "status_code": '400',
+                "message": traceback.format_exc()}
+            return str(error_result).encode('utf-8'), 400
+    def change_gpt_weights(self,gpt_path):
+        global hz, max_sec, t2s_model, config
+        hz = 50
+        dict_s1 = torch.load(gpt_path, map_location="cpu")
+        config = dict_s1["config"]
+        max_sec = config["data"]["max_sec"]
+        t2s_model = Text2SemanticLightningModule(config, "****", is_train=False)
+        t2s_model.load_state_dict(dict_s1["weight"])
+        t2s_model = t2s_model.to(self.device)
+        t2s_model.eval()
+        return t2s_model
+    def change_sovits_weights(self,sovits_path):
+
+        dict_s2 = torch.load(sovits_path, map_location="cpu")
+        hps = dict_s2["config"]
+        hps = DictToAttrRecursive(hps)
+        hps.model.semantic_frame_rate = "25hz"
+        vq_model = SynthesizerTrn(
+            hps.data.filter_length // 2 + 1,
+            hps.train.segment_size // hps.data.hop_length,
+            n_speakers=hps.data.n_speakers,
+            **hps.model
+        )
+        vq_model = vq_model.to(self.device)
+        vq_model.eval()
+        return vq_model, hps
 
     def get_first(self, text):
         pattern = "[" + "".join(re.escape(sep) for sep in splits) + "]"
@@ -428,7 +497,7 @@ class MyProcessor(allspark.BaseProcessor):
                 result[len(result) - 1] += text
         return result
 
-    def get_tts_wav(self,ref_wav_path, prompt_text, prompt_language, text, text_language, top_k=5, top_p=1, temperature=1):
+    def get_tts_wav(self,model_name,ref_wav_path, prompt_text, prompt_language, text, text_language, top_k=5, top_p=1, temperature=1):
         prompt_language = dict_language[prompt_language]
         text_language = dict_language[text_language]
         prompt_text = prompt_text.strip("\n")
@@ -437,6 +506,10 @@ class MyProcessor(allspark.BaseProcessor):
         text = text.strip("\n")
         if (text[0] not in splits and len(
             self.get_first(text)) < 4): text = "。" + text if text_language != "en" else "." + text
+        model_array = self.model_dicts[model_name]
+        vq_model = model_array[0]
+        t2s_model = model_array[1]
+        hps = model_array[2]
         zero_wav = np.zeros(int(hps.data.sampling_rate * 0.3), dtype=np.float32)
         with torch.no_grad():
             wav16k, sr = librosa.load(ref_wav_path, sr=16000)
@@ -450,7 +523,7 @@ class MyProcessor(allspark.BaseProcessor):
             ].transpose(
                 1, 2
             )  # .float()
-            codes = self.vq_model.extract_latent(ssl_content)
+            codes = vq_model.extract_latent(ssl_content)
 
             prompt_semantic = codes[0, 0]
         while "\n\n" in text:
@@ -472,7 +545,7 @@ class MyProcessor(allspark.BaseProcessor):
             prompt = prompt_semantic.unsqueeze(0).to(self.device)
             with torch.no_grad():
                 # pred_semantic = t2s_model.model.infer(
-                pred_semantic, idx = self.t2s_model.model.infer_panel(
+                pred_semantic, idx = t2s_model.model.infer_panel(
                     all_phoneme_ids,
                     all_phoneme_len,
                     prompt,
@@ -488,7 +561,7 @@ class MyProcessor(allspark.BaseProcessor):
             refer = self.get_spepc(hps, ref_wav_path)  # .to(device)
             refer = refer.to(self.device)
             audio = (
-                self.vq_model.decode(
+                    vq_model.decode(
                     pred_semantic, torch.LongTensor(phones2).to(self.device).unsqueeze(0), refer
                 )
                 .detach()
@@ -504,55 +577,7 @@ class MyProcessor(allspark.BaseProcessor):
             align_offset_time += np.concatenate([audio, zero_wav], 0).size / hps.data.sampling_rate
         yield hps.data.sampling_rate, (np.concatenate(audio_opt, 0) * 32768).astype(np.int16), align_infos
 
-    def post_process(self, data):
-        """ process after process
-        """
-        audio_base64 = data.get("audio")
-        align_info = data.get("align_info")
-        response_data = {
-            "audio": audio_base64,
-            "align_info": align_info,
-        }
-        json_response = json.dumps(response_data, ensure_ascii=False)
-        return str(json_response).encode('utf-8')
 
-    def process(self, data):
-        try:
-            self.vq_model.eval()
-            self.t2s_model.eval()
-            text, text_language = self.pre_process(data)
-            with torch.no_grad():
-                gen = self.get_tts_wav(
-                    refer_wav_path, prompt_text, prompt_language, text, text_language
-                )
-                sampling_rate, audio_data, align_info = next(gen)
-
-            # # save test align info
-            # json.dump(align_info, open("./tmp/align_info.json", "w", encoding="utf-8"), ensure_ascii=False)
-
-            wav = BytesIO()
-            sf.write(wav, audio_data, sampling_rate, format="wav")
-            wav.seek(0)
-
-            # Convert audio stream to base64
-            audio_base64 = base64.b64encode(wav.read()).decode('utf-8')
-            data = {
-                "audio": audio_base64,
-                "align_info": align_info
-            }
-            torch.cuda.empty_cache()
-            if self.device == "mps":
-                print('executed torch.mps.empty_cache()')
-                torch.mps.empty_cache()
-            # Return audio stream and timestamp info as JSON
-            return self.post_process(data), 200
-        except:
-            print(traceback.format_exc())
-            error_result = {
-                "status_text": 'error',
-                "status_code": '400',
-                "message": traceback.format_exc()}
-            return str(error_result).encode('utf-8'), 400
 
 
 if __name__ == '__main__':

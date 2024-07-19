@@ -131,7 +131,7 @@ class TextAudioSpeakerLoader(torch.utils.data.Dataset):
         audio_norm = audio_norm.unsqueeze(0)
         spec = spectrogram_torch(audio_norm, self.filter_length, self.sampling_rate, self.hop_length, self.win_length,
                                   center=False)
-        spec = torch.squeeze(spec, 0)
+        spec = torch.squeeze(spec, dim=0)
         return spec, audio_norm
 
     def get_sid(self, sid):

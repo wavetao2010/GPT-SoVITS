@@ -4,7 +4,7 @@ import torch
 import torchaudio
 from torch import nn
 from feature_extractor import cnhubert
-cnhubert_base_path = "pretrained_models/chinese-hubert-base"
+cnhubert_base_path = "GPT_SoVITS/pretrained_models/chinese-hubert-base"
 cnhubert.cnhubert_base_path=cnhubert_base_path
 ssl_model = cnhubert.get_model()
 from text import cleaned_text_to_sequence
@@ -86,38 +86,52 @@ class T2SEncoder(nn.Module):
 class T2SModel(nn.Module):
     def __init__(self, t2s_path, vits_model):
         super().__init__()
-        dict_s1 = torch.load(t2s_path, map_location="cpu")
+        self.device = torch.device("cuda")
+        dict_s1 = torch.load(t2s_path, map_location=self.device)
         self.config = dict_s1["config"]
         self.t2s_model = Text2SemanticLightningModule(self.config, "ojbk", is_train=False)
         self.t2s_model.load_state_dict(dict_s1["weight"])
         self.t2s_model.eval()
+        self.t2s_model.to(device=self.device)
         self.vits_model = vits_model.vq_model
+        self.vits_model.to(device=self.device)
         self.hz = 50
         self.max_sec = self.config["data"]["max_sec"]
         self.t2s_model.model.top_k = torch.LongTensor([self.config["inference"]["top_k"]])
         self.t2s_model.model.early_stop_num = torch.LongTensor([self.hz * self.max_sec])
-        self.t2s_model = self.t2s_model.model
+        self.t2s_model = self.t2s_model.model.to(device=self.device)
         self.t2s_model.init_onnx()
-        self.onnx_encoder = T2SEncoder(self.t2s_model, self.vits_model)
-        self.first_stage_decoder = self.t2s_model.first_stage_decoder
-        self.stage_decoder = self.t2s_model.stage_decoder
+        self.onnx_encoder = T2SEncoder(self.t2s_model, self.vits_model).to(device=self.device)
+        self.first_stage_decoder = self.t2s_model.first_stage_decoder.to(device=self.device)
+        self.stage_decoder = self.t2s_model.stage_decoder.to(device=self.device)
         #self.t2s_model = torch.jit.script(self.t2s_model)
 
     def forward(self, ref_seq, text_seq, ref_bert, text_bert, ssl_content):
         early_stop_num = self.t2s_model.early_stop_num
-
+        # 确保所有输入张量在同一设备上
+        ref_seq = ref_seq.to(self.device)
+        text_seq = text_seq.to(self.device)
+        ref_bert = ref_bert.to(self.device)
+        text_bert = text_bert.to(self.device)
+        ssl_content = ssl_content.to(self.device)
         #[1,N] [1,N] [N, 1024] [N, 1024] [1, 768, N]
         x, prompts = self.onnx_encoder(ref_seq, text_seq, ref_bert, text_bert, ssl_content)
-
+        x = x.to(self.device)
+        prompts = prompts.to(self.device)
         prefix_len = prompts.shape[1]
 
         #[1,N,512] [1,N]
         y, k, v, y_emb, x_example = self.first_stage_decoder(x, prompts)
+        y = y.to(self.device)
+        k = k.to(self.device)
+        v = v.to(self.device)
+        y_emb = y_emb.to(self.device)
+        x_example = x_example.to(self.device)
 
         stop = False
         for idx in range(1, 1500):
             #[1, N] [N_layer, N, 1, 512] [N_layer, N, 1, 512] [1, N, 512] [1] [1, N, 512] [1, N]
-            enco = self.stage_decoder(y, k, v, y_emb, x_example)
+            enco = self.stage_decoder(y, k, v, y_emb, x_example).to(self.device)
             y, k, v, y_emb, logits, samples = enco
             if early_stop_num != -1 and (y.shape[1] - prefix_len) > early_stop_num:
                 stop = True
@@ -154,10 +168,11 @@ class T2SModel(nn.Module):
                 "text_bert": {0 : "text_length"},
                 "ssl_content": {2 : "ssl_length"},
             },
-            opset_version=16
+            opset_version=19
         )
         x, prompts = self.onnx_encoder(ref_seq, text_seq, ref_bert, text_bert, ssl_content)
-
+        print(x.shape, prompts.shape)
+        print(x, prompts)
         torch.onnx.export(
             self.first_stage_decoder,
             (x, prompts),
@@ -169,10 +184,11 @@ class T2SModel(nn.Module):
                 "prompts": {1 : "prompts_length"},
             },
             verbose=False,
-            opset_version=16
+            opset_version=19
         )
         y, k, v, y_emb, x_example = self.first_stage_decoder(x, prompts)
-
+        print(y.shape, k.shape, v.shape, y_emb.shape, x_example.shape)
+        print(y, k, v, y_emb, x_example)
         torch.onnx.export(
             self.stage_decoder,
             (y, k, v, y_emb, x_example),
@@ -187,14 +203,15 @@ class T2SModel(nn.Module):
                 "ix_example": {1 : "ix_example_length"},
             },
             verbose=False,
-            opset_version=16
+            opset_version=19
         )
 
 
 class VitsModel(nn.Module):
     def __init__(self, vits_path):
         super().__init__()
-        dict_s2 = torch.load(vits_path,map_location="cpu")
+        self.device = torch.device("cuda")
+        dict_s2 = torch.load(vits_path,map_location=self.device)
         self.hps = dict_s2["config"]
         self.hps = DictToAttrRecursive(self.hps)
         self.hps.model.semantic_frame_rate = "25hz"
@@ -203,7 +220,7 @@ class VitsModel(nn.Module):
             self.hps.train.segment_size // self.hps.data.hop_length,
             n_speakers=self.hps.data.n_speakers,
             **self.hps.model
-        )
+        ).to(self.device)
         self.vq_model.eval()
         self.vq_model.load_state_dict(dict_s2["weight"], strict=False)
         
@@ -253,7 +270,7 @@ class GptSoVits(nn.Module):
                 "pred_semantic": {2 : "pred_length"},
                 "ref_audio": {1 : "audio_length"},
             },
-            opset_version=17,
+            opset_version=19,
             verbose=False
         )
 
@@ -266,6 +283,21 @@ class SSLModel(nn.Module):
     def forward(self, ref_audio_16k):
         return self.ssl.model(ref_audio_16k)["last_hidden_state"].transpose(1, 2)
 
+    def export(self, ref_audio_16k, project_name):
+        self.ssl.model.eval()
+        torch.onnx.export(
+            self,
+            (ref_audio_16k),
+            f"onnx/{project_name}/{project_name}_cnhubert.onnx",
+            input_names=["ref_audio_16k"],
+            output_names=["last_hidden_state"],
+            dynamic_axes={
+                "ref_audio_16k": {1: "text_length"},
+                "last_hidden_state": {2: "pred_length"}
+            },
+            opset_version=17,
+            verbose=False
+        )
 
 def export(vits_path, gpt_path, project_name):
     vits = VitsModel(vits_path)
@@ -299,7 +331,7 @@ def export(vits_path, gpt_path, project_name):
     a = gpt_sovits(ref_seq, text_seq, ref_bert, text_bert, ref_audio_sr, ssl_content).detach().cpu().numpy()
 
     soundfile.write("out.wav", a, vits.hps.data.sampling_rate)
-
+    ssl.export(ref_audio_16k, project_name)
     gpt_sovits.export(ref_seq, text_seq, ref_bert, text_bert, ref_audio_sr, ssl_content, project_name)
 
     MoeVSConf = {
@@ -326,9 +358,9 @@ if __name__ == "__main__":
     except:
         pass
 
-    gpt_path = "GPT_weights/nahida-e25.ckpt"
-    vits_path = "SoVITS_weights/nahida_e30_s3930.pth"
-    exp_path = "nahida"
+    gpt_path = "GPT_weights/wukong-e15.ckpt"
+    vits_path = "SoVITS_weights/wukong_e24_s840.pth"
+    exp_path = "wukong"
     export(vits_path, gpt_path, exp_path)
 
     # soundfile.write("out.wav", a, vits.hps.data.sampling_rate)

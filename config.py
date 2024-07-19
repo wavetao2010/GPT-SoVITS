@@ -8,14 +8,16 @@ sovits_path = {
     "wukong": "SoVITS_weights/wukong_e24_s840.pth",
     "silang": "SoVITS_weights/silang_e20_s460.pth",
     "TVB": "SoVITS_weights/TVB_e24_s504.pth",
-    "maikease":"SoVITS_weights/maikease_e24_s1152.pth"
+    "maikease":"SoVITS_weights/maikease_e24_s1152.pth",
+    "paimeng":"SoVITS_weights/paimeng2_e110_s159940.pth"
 }
 gpt_path = {
     "xiong2": "GPT_weights/xiong2-e15.ckpt",
     "wukong": "GPT_weights/wukong-e15.ckpt",
     "silang": "GPT_weights/silang-e15.ckpt",
     "TVB": "GPT_weights/TVB-e15.ckpt",
-    "maikease":"GPT_weights/maikease-e15.ckpt"
+    "maikease":"GPT_weights/maikease-e15.ckpt",
+    "paimeng":"GPT_weights/paimeng2-e100.ckpt"
 }
 
 refer_path = {
@@ -41,6 +43,70 @@ prompt_language = {
     "TVB": "zh",
     "maikease":"zh"
 }
+
+emotion_list = {
+    "xiong2": {
+        "default": {
+            "refer_path": "refer/xiong2.wav",
+            "prompt_text": "支持多种语言，包括中文、英语、日语、韩语、法语、德语、西班牙语、阿拉伯语等50多种语言。",
+            "prompt_language": "zh"
+        }},
+    "wukong": {
+        "default": {
+            "refer_path": "refer/wukong.wav",
+            "prompt_text": "当贝播放器是一款专注大屏端的本地播放软件，专为智能电视盒子投影打造。",
+            "prompt_language": "zh"
+        }
+    },
+    "silang": {
+        "default": {
+            "refer_path": "refer/silang.wav",
+            "prompt_text": "最近我们店里在疯狂地做着一款生日蛋糕，安妮贝壳蛋糕店，环境超级干净。",
+            "prompt_language": "zh"
+        }
+    },
+    "TVB": {
+        "default": {
+            "refer_path": "refer/TVB.wav",
+            "prompt_text": "可以 FB 先开,平滑过去,不过 FB 没谷歌稳定,所以可以把预算分下,谷歌占小部分",
+            "prompt_language": "zh"
+        }
+    },
+    "maikease":{
+        "default": {
+            "refer_path": "refer/maikease.wav",
+            "prompt_text": "支持多种语言，包括中文、英语、日语、韩语、法语、德语、西班牙语、阿拉伯语等50多种语言。",
+            "prompt_language": "zh"
+        }
+    },
+    "paimeng": {
+        "default": {
+            "refer_path": "refer/说话—既然罗莎莉亚说足迹上有元素力，用元素视野应该能很清楚地看到吧。.wav",
+            "prompt_text": "既然罗莎莉亚说足迹上有元素力，用元素视野应该能很清楚地看到吧。",
+            "prompt_language": "zh"
+        },
+        "angry": {
+            "refer_path": "refer/生气—呜哇好生气啊！不要把我跟一斗相提并论！.wav",
+            "prompt_text": "呜哇好生气啊！不要把我跟一斗相提并论！",
+            "prompt_language": "中文"
+        },
+        "excited": {
+            "refer_path": "refer/激动—好耶！《特尔克西的奇幻历险》出发咯！.wav",
+            "prompt_text": "好耶！《特尔克西的奇幻历险》出发咯！",
+            "prompt_language": "中文"
+        },
+        "empathetic": {
+            "refer_path": "refer/疑问—哇，这个，还有这个…只是和史莱姆打了一场，就有这么多结论吗？.wav",
+            "prompt_text": "哇，这个，还有这个…只是和史莱姆打了一场，就有这么多结论吗？",
+            "prompt_language": "中文"
+        }
+    }
+}
+
+model_names_list = ['xiong2', 'wukong', 'silang', 'TVB', 'maikease']
+
+
+
 
 is_half_str = os.environ.get("is_half", "True")
 is_half = True if is_half_str.lower() == 'true' else False
@@ -100,6 +166,8 @@ class Config:
         self.refer_path = refer_path
         self.refer_text = prompt_text
         self.refer_language = prompt_language
+        self.emotion_list = emotion_list
+        self.model_names_list = model_names_list
 
         self.webui_port_main = webui_port_main
         self.webui_port_uvr5 = webui_port_uvr5
